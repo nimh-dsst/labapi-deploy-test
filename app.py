@@ -14,6 +14,7 @@ from labarchives_auth import (
     callback_error,
     create_login_state,
     get_browser_identity,
+    needs_callback_query_repair,
     redirect_to_labarchives,
 )
 
@@ -117,6 +118,11 @@ def main() -> None:
         for key in callback_fields
         if key in st.query_params
     }
+    if needs_callback_query_repair(callback):
+        # The browser component repairs the raw URL and reloads once. Leave the
+        # query intact until then; clearing it here would discard the auth code.
+        st.info("Completing LabArchives sign-in…")
+        return
     clear_callback()
     secret = os.environ["ACCESS_PWD"]
 

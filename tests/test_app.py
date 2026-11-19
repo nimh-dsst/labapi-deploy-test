@@ -5,7 +5,7 @@ import os
 import unittest
 from pathlib import Path
 from unittest.mock import PropertyMock, patch
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from labapi import Client
 from labapi.user import User
@@ -13,7 +13,12 @@ from labapi.util import NotebookInit
 from requests.exceptions import ConnectionError
 from streamlit.testing.v1 import AppTest
 
-from labarchives_auth import create_login_state, valid_login_state
+from labarchives_auth import (
+    callback_error,
+    create_login_state,
+    needs_callback_query_repair,
+    valid_login_state,
+)
 
 CALLBACK_URL = "https://connect.example.org/content/test-app/"
 APP_PATH = str(Path(__file__).resolve().parents[1] / "app.py")
@@ -28,6 +33,34 @@ ENVIRONMENT = {
 
 
 class LoginStateTests(unittest.TestCase):
+    def test_second_question_mark_requires_repair_before_decoding_the_code(self):
+        state = create_login_state(CALLBACK_URL, BROWSER_TOKEN, API_PASSWORD)
+        query = urlencode({"state": state}) + "?" + urlencode(
+            {"auth_code": "code+with/special=characters%", "email": "person@example.org"}
+        )
+        callback = parse_qs(query)
+        self.assertTrue(needs_callback_query_repair(callback))
+        self.assertNotIn("auth_code", callback)
+        self.assertFalse(
+            needs_callback_query_repair({"state": [state], "auth_code": ["normal"]})
+        )
+        self.assertFalse(
+            needs_callback_query_repair({"state": [state, state + "?auth_code=code"]})
+        )
+
+    def test_callback_reports_missing_empty_and_duplicate_codes_separately(self):
+        state = create_login_state(CALLBACK_URL, BROWSER_TOKEN, API_PASSWORD)
+        base = {"state": [state], "email": ["person@example.org"]}
+        for values, expected in (([], "missing"), ([""], "empty"), (["a", "b"], "repeated")):
+            with self.subTest(expected=expected):
+                error = callback_error(
+                    {**base, "auth_code": values},
+                    CALLBACK_URL,
+                    BROWSER_TOKEN,
+                    API_PASSWORD,
+                )
+                self.assertIn(f"auth_code ({expected})", error)
+
     def test_state_is_bound_to_browser_app_and_secret(self):
         state = create_login_state(CALLBACK_URL, BROWSER_TOKEN, API_PASSWORD)
         self.assertTrue(
@@ -228,8 +261,22 @@ class AppTests(unittest.TestCase):
         app.query_params.update({"email": self.user.email, "auth_code": "test-code"})
         app.run()
         self.assertFalse(app.exception)
-        self.assertIn("missing or repeats: state", app.error[0].value)
+        self.assertIn("state (missing)", app.error[0].value)
         self.client_factory.assert_not_called()
+
+    def test_malformed_callback_waits_for_raw_url_repair_without_losing_code(self):
+        state = create_login_state(CALLBACK_URL, BROWSER_TOKEN, API_PASSWORD)
+        app = AppTest.from_file(APP_PATH)
+        app.query_params.update(
+            {"state": state + "?auth_code=private-code", "email": self.user.email}
+        )
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.error)
+        self.assertIn("Completing LabArchives sign-in", app.info[0].value)
+        self.assertTrue(app.query_params)
+        self.client_factory.assert_not_called()
+        self.assertNotIn("labarchives_user", app.session_state)
 
     def test_missing_forwarded_cookies_does_not_disable_login(self):
         with patch(

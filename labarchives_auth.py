@@ -12,8 +12,22 @@ from streamlit.components.v2 import component
 
 LOGIN_LIFETIME_SECONDS = 300
 
-BROWSER_IDENTITY_JS = """
+BROWSER_IDENTITY_JS = r"""
 export default function({ data, setStateValue }) {
+    // Some callback producers append ?auth_code=... even when redirect_uri
+    // already has ?state=.... Repair the delimiter before parsing any values,
+    // so percent-encoded +, /, =, and % in the code survive unchanged.
+    const search = window.location.search;
+    const repaired = search.replace(
+        /^(\?state=\d+\.[A-Za-z0-9_-]+\.[a-f0-9]{64})\?(?=(?:auth_code|email|error)=)/,
+        "$1&"
+    );
+    if (repaired !== search) {
+        const url = new URL(window.location.href);
+        url.search = repaired;
+        window.location.replace(url.href);
+        return;
+    }
     try {
         const key = "labapi-deploy-test:browser:" + data.app_id;
         let token = window.localStorage.getItem(key);
@@ -116,6 +130,19 @@ def valid_login_state(
     )
 
 
+def needs_callback_query_repair(callback: dict[str, list[str]]) -> bool:
+    """Wait for the browser to repair a second '?' after our signed state.
+
+    Do not extract the code from an already decoded state value: decoding it
+    twice would change valid '+' characters to spaces.
+    """
+    states = callback.get("state", [])
+    return len(states) == 1 and re.match(
+        r"^\d+\.[A-Za-z0-9_-]+\.[a-f0-9]{64}\?(?:auth_code|email|error)=",
+        states[0],
+    ) is not None
+
+
 def callback_error(
     callback: dict[str, list[str]],
     callback_url: str,
@@ -146,13 +173,17 @@ def callback_error(
             "LabArchives returned a login error. Check the LabArchives API key, "
             "API password, and regional API_URL."
         )
-    missing = [
-        key
-        for key in ("email", "auth_code", "state")
-        if len(callback.get(key, [])) != 1 or not callback[key][0]
-    ]
-    if missing:
-        return "LabArchives login response is missing or repeats: " + ", ".join(missing)
+    issues = []
+    for key in ("email", "auth_code", "state"):
+        values = callback.get(key, [])
+        if not values:
+            issues.append(f"{key} (missing)")
+        elif len(values) != 1:
+            issues.append(f"{key} (repeated)")
+        elif not values[0]:
+            issues.append(f"{key} (empty)")
+    if issues:
+        return "LabArchives login response has invalid parameters: " + ", ".join(issues)
     if not valid_login_state(callback["state"][0], callback_url, browser_token, secret):
         return (
             "The login response did not match this browser or its five-minute "

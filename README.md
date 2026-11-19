@@ -68,6 +68,11 @@ access key ID, check `ACCESS_KEYID` and `API_URL`. For a rejected signature, che
 from your Posit Connect publisher key. A timestamp rejection may require checking
 the Connect server clock.
 
+The app also handles callbacks that append `?auth_code=...` to a URL already
+containing `?state=...`. It repairs the delimiter before decoding the code and
+still verifies the signed state. Missing, empty, and repeated callback parameters
+are reported separately.
+
 Callback credentials are removed from the address bar before the API call. Only
 your email and notebook list remain in your Streamlit session; they are not
 shared through an app cache.
