@@ -22,11 +22,14 @@
     "requirements.txt": {
       "checksum": "86287e0879178e1113486fd495bba352"
     },
+    "LABARCHIVES_AUTH_GUIDE.md": {
+      "checksum": "5463a709bda86ae64c5af59e8e1f8c35"
+    },
     "LICENSE": {
       "checksum": "65d3616852dbf7b1a6d4b53b00626032"
     },
     "README.md": {
-      "checksum": "2d0490197adbd2bf7dc18f3ad7b00f8c"
+      "checksum": "a17c26870ae5910e2ba1434309149a6c"
     },
     "app.py": {
       "checksum": "ba11bb826c1bffab8e28e1a0cd66e425"

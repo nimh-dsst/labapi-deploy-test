@@ -9,6 +9,10 @@ user's accessible notebook names and IDs. The **Deployment diagnostics** expande
 shows package versions and an interaction counter, even before API credentials
 are configured. The app only reads notebook access information.
 
+For the working authentication flow, deployment details, troubleshooting, and
+lessons from testing on Connect, see the
+[LabArchives authentication guide](LABARCHIVES_AUTH_GUIDE.md).
+
 ## Run locally
 
 Use Python 3.12, matching the Posit Connect server:
