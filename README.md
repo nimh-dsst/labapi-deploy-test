@@ -44,18 +44,29 @@ the app in its own browser tab for login. API access credentials are issued by
 LabArchives; they are separate from your Connect API key and your personal login.
 Keep their values in environment variables, outside the repository and manifest.
 
-Click **Log in to LabArchives** and authenticate on the LabArchives page, including
-institutional SSO if applicable. LabArchives returns to the app in the new tab;
+Click **Log in to LabArchives**. The button first opens the configured app URL in
+a standalone tab, then redirects that tab to LabArchives. This also works when
+you start in Connect's dashboard iframe or through an alternate app URL.
+Authenticate on the LabArchives page, including institutional SSO if applicable.
+LabArchives returns to the app in the new tab;
 the app exchanges the callback's `email` and `auth_code` using `Client.login()` and
-displays your notebooks. Login links expire after five minutes; reload the app to
-generate a fresh link if needed.
+displays your notebooks. Complete login within five minutes; use the login button
+again to start a fresh attempt if needed.
 
 The app creates a random browser token in `localStorage` to validate the returning
 login request. It does not need access to Connect or Streamlit cookies, which may
 be unavailable behind a proxy. A small built-in Streamlit component reads this
 token in both the original and returning tabs. Browser storage contains only this
-random token, never login credentials or notebook information. Open the app from
-the same hostname as `LABARCHIVES_CALLBACK_URL` so both tabs share storage.
+random token, never login credentials or notebook information. Authentication
+starts and ends at `LABARCHIVES_CALLBACK_URL` so both steps use the same browser
+storage context.
+
+If LabArchives returns an `error` instead of login credentials, the app explains
+the rejection separately from browser verification failures. For an invalid
+access key ID, check `ACCESS_KEYID` and `API_URL`. For a rejected signature, check
+`ACCESS_PWD` and the region. These must be LabArchives API credentials, separate
+from your Posit Connect publisher key. A timestamp rejection may require checking
+the Connect server clock.
 
 Callback credentials are removed from the address bar before the API call. Only
 your email and notebook list remain in your Streamlit session; they are not

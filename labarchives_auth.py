@@ -34,6 +34,19 @@ export default function({ data, setStateValue }) {
 """
 
 _browser_identity = component("labapi_browser_identity", js=BROWSER_IDENTITY_JS)
+_login_redirect = component(
+    "labapi_login_redirect",
+    js="""
+    export default function({ data }) {
+        window.location.assign(data.url);
+    }
+    """,
+)
+
+
+def redirect_to_labarchives(url: str) -> None:
+    """Navigate the standalone sign-in tab to the signed LabArchives URL."""
+    _login_redirect(data={"url": url}, key="labarchives_login_redirect")
 
 
 def get_browser_identity(callback_url: str) -> tuple[str | None, bool]:
@@ -101,3 +114,48 @@ def valid_login_state(
             _signature(payload, callback_url, browser_token, secret).encode(),
         )
     )
+
+
+def callback_error(
+    callback: dict[str, list[str]],
+    callback_url: str,
+    browser_token: str,
+    secret: str,
+) -> str | None:
+    """Explain callback failures without displaying credentials or signed URLs."""
+    if "error" in callback:
+        message = " ".join(callback["error"]).casefold()
+        if "akid" in message or "access key id" in message:
+            return (
+                "LabArchives rejected the API access key ID. Check ACCESS_KEYID "
+                "and API_URL; use your LabArchives API key, not a Connect API key."
+            )
+        if "signature" in message or "access password" in message:
+            return (
+                "LabArchives rejected the login signature. Check ACCESS_PWD and "
+                "confirm API_URL matches your LabArchives region."
+            )
+        if any(word in message for word in ("expired", "expires", "timestamp")):
+            return (
+                "LabArchives rejected the login timestamp. Start a new login; "
+                "if it repeats immediately, check the Connect server's clock."
+            )
+        if any(word in message for word in ("cancel", "denied")):
+            return "LabArchives login was cancelled or access was denied."
+        return (
+            "LabArchives returned a login error. Check the LabArchives API key, "
+            "API password, and regional API_URL."
+        )
+    missing = [
+        key
+        for key in ("email", "auth_code", "state")
+        if len(callback.get(key, [])) != 1 or not callback[key][0]
+    ]
+    if missing:
+        return "LabArchives login response is missing or repeats: " + ", ".join(missing)
+    if not valid_login_state(callback["state"][0], callback_url, browser_token, secret):
+        return (
+            "The login response did not match this browser or its five-minute "
+            "window expired. Start a new login using the button below."
+        )
+    return None

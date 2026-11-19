@@ -109,6 +109,9 @@ class AppTests(unittest.TestCase):
         self.client = self.client_factory.return_value.__enter__.return_value
         self.client.login.return_value = self.user
         self.client.generate_auth_url.return_value = "https://api.labarchives.com/login"
+        self.redirect_patch = patch("labarchives_auth.redirect_to_labarchives")
+        self.redirect = self.redirect_patch.start()
+        self.addCleanup(self.redirect_patch.stop)
 
     def callback_app(self, **overrides):
         params = {
@@ -130,10 +133,20 @@ class AppTests(unittest.TestCase):
         self.assertTrue(app.button[-1].disabled)
         self.assertTrue(json.loads(app.json[0].value)["python"].startswith("3.12."))
 
-    def test_login_button_uses_signed_callback_with_connect_path(self):
+    def test_login_button_starts_at_canonical_app_without_reading_iframe_storage(self):
         app = AppTest.from_file(APP_PATH).run()
         self.assertFalse(app.exception)
         self.assertEqual(app.get("link_button")[0].proto.label, "Log in to LabArchives")
+        url = app.get("link_button")[0].proto.url
+        self.assertEqual(url, CALLBACK_URL + "?start_login=1")
+        self.browser_identity.assert_not_called()
+        self.client_factory.assert_not_called()
+
+    def test_standalone_login_start_uses_signed_callback_and_redirects(self):
+        app = AppTest.from_file(APP_PATH)
+        app.query_params["start_login"] = "1"
+        app.run()
+        self.assertFalse(app.exception)
         redirect = self.client.generate_auth_url.call_args.args[0]
         parsed = urlsplit(redirect)
         self.assertEqual(parsed.path, "/content/test-app/")
@@ -142,6 +155,8 @@ class AppTests(unittest.TestCase):
             valid_login_state(state, CALLBACK_URL, BROWSER_TOKEN, API_PASSWORD)
         )
         self.client.login.assert_not_called()
+        self.redirect.assert_called_once_with("https://api.labarchives.com/login")
+        self.assertEqual(app.query_params, {})
 
     def test_login_in_new_session_lists_all_notebooks_and_clears_callback(self):
         app = self.callback_app()
@@ -189,6 +204,32 @@ class AppTests(unittest.TestCase):
         self.assertNotIn("labarchives_user", app.session_state)
         self.assertEqual(app.query_params, {})
         self.assertTrue(self.client_factory.return_value.__exit__.called)
+
+    def test_provider_error_is_explained_even_without_email_code_or_state(self):
+        for message, expected in (
+            ("The access key id (akid) is not valid", "ACCESS_KEYID"),
+            ("The request signature is not valid", "ACCESS_PWD"),
+            ("The request timestamp has expired", "server's clock"),
+            ("User denied access", "cancelled or access was denied"),
+            ("Unknown error containing private-test-auth-code", "regional API_URL"),
+        ):
+            with self.subTest(message=message):
+                app = AppTest.from_file(APP_PATH)
+                app.query_params["error"] = message
+                app.run()
+                self.assertFalse(app.exception)
+                self.assertIn(expected, app.error[0].value)
+                self.assertNotIn("private-test-auth-code", app.error[0].value)
+                self.assertEqual(app.query_params, {})
+                self.client_factory.assert_not_called()
+
+    def test_missing_verification_state_has_a_specific_error(self):
+        app = AppTest.from_file(APP_PATH)
+        app.query_params.update({"email": self.user.email, "auth_code": "test-code"})
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertIn("missing or repeats: state", app.error[0].value)
+        self.client_factory.assert_not_called()
 
     def test_missing_forwarded_cookies_does_not_disable_login(self):
         with patch(

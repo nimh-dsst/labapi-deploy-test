@@ -11,10 +11,22 @@ from labapi.exceptions import LabArchivesError
 from requests.exceptions import RequestException
 
 from labarchives_auth import (
+    callback_error,
     create_login_state,
     get_browser_identity,
-    valid_login_state,
+    redirect_to_labarchives,
 )
+
+
+def show_login_button(callback_url: str) -> None:
+    # Start on the canonical app URL in a top-level tab. Dashboard iframes may
+    # have partitioned browser storage, and aliases may use a different origin.
+    st.link_button(
+        "Log in to LabArchives",
+        f"{callback_url}?{urlencode({'start_login': '1'})}",
+        type="primary",
+    )
+    st.caption("Sign-in opens in a new tab. Your notebooks will appear in that tab.")
 
 
 def main() -> None:
@@ -40,7 +52,7 @@ def main() -> None:
     callback_fields = ("email", "auth_code", "state", "error")
 
     def clear_callback() -> None:
-        for key in callback_fields:
+        for key in (*callback_fields, "start_login"):
             if key in st.query_params:
                 del st.query_params[key]
 
@@ -73,6 +85,16 @@ def main() -> None:
         )
         return
 
+    starting_login = st.query_params.get_all("start_login") == ["1"]
+    has_callback = any(key in st.query_params for key in callback_fields)
+    if (
+        not starting_login
+        and not has_callback
+        and "labarchives_user" not in st.session_state
+    ):
+        show_login_button(callback_url)
+        return
+
     # Read the browser token before consuming the callback: the component's
     # first render returns no value, then reruns Python once storage is ready.
     browser_token, storage_error = get_browser_identity(callback_url)
@@ -99,20 +121,9 @@ def main() -> None:
     secret = os.environ["ACCESS_PWD"]
 
     if callback:
-        complete = all(
-            len(callback.get(key, [])) == 1 and callback[key][0]
-            for key in ("email", "auth_code", "state")
-        )
-        if (
-            not complete
-            or "error" in callback
-            or not valid_login_state(
-                callback["state"][0], callback_url, browser_token, secret
-            )
-        ):
-            st.error(
-                "Login was incomplete or expired. Please log in again from this browser."
-            )
+        error = callback_error(callback, callback_url, browser_token, secret)
+        if error:
+            st.error(error)
         else:
             try:
                 with st.spinner("Loading your LabArchives notebooks…"), Client(
@@ -149,6 +160,10 @@ def main() -> None:
         st.caption("This list was fetched at login. Log out and back in to refresh it.")
         return
 
+    if not starting_login or callback:
+        show_login_button(callback_url)
+        return
+
     try:
         state = create_login_state(callback_url, browser_token, secret)
         redirect_url = f"{callback_url}?{urlencode({'state': state})}"
@@ -158,11 +173,8 @@ def main() -> None:
         st.error("Could not start LabArchives login. Check the app's API configuration.")
         return
 
-    st.link_button("Log in to LabArchives", auth_url, type="primary")
-    st.caption(
-        "LabArchives opens in a new tab and returns here after login. "
-        "Login links expire after five minutes; reload this page if needed."
-    )
+    st.info("Opening LabArchives sign-in…")
+    redirect_to_labarchives(auth_url)
 
 
 if __name__ == "__main__":
