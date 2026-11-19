@@ -1,0 +1,2 @@
+labapi==1.2.0
+streamlit==1.67.0
