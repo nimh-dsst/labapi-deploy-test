@@ -10,7 +10,11 @@ from labapi import Client
 from labapi.exceptions import LabArchivesError
 from requests.exceptions import RequestException
 
-from labarchives_auth import create_login_state, valid_login_state
+from labarchives_auth import (
+    create_login_state,
+    get_browser_identity,
+    valid_login_state,
+)
 
 
 def main() -> None:
@@ -33,20 +37,17 @@ def main() -> None:
             st.session_state.clicks += 1
         st.write(f"Button clicks this session: {st.session_state.clicks}")
 
-    # Consume credentials once, removing them from the address bar before any
-    # network request or subsequent interaction. Never cache them globally.
     callback_fields = ("email", "auth_code", "state", "error")
-    callback = {
-        key: st.query_params.get_all(key)
-        for key in callback_fields
-        if key in st.query_params
-    }
-    for key in callback:
-        del st.query_params[key]
+
+    def clear_callback() -> None:
+        for key in callback_fields:
+            if key in st.query_params:
+                del st.query_params[key]
 
     required = ("ACCESS_KEYID", "ACCESS_PWD", "LABARCHIVES_CALLBACK_URL")
     missing = [key for key in required if not os.environ.get(key)]
     if missing:
+        clear_callback()
         st.info("Configure these app environment variables: " + ", ".join(missing))
         st.button("Log in to LabArchives", disabled=True)
         return
@@ -65,17 +66,36 @@ def main() -> None:
         ):
             raise ValueError
     except ValueError:
+        clear_callback()
         st.error(
             "LABARCHIVES_CALLBACK_URL must be the app's HTTPS URL without query "
             "parameters; HTTP is allowed for localhost."
         )
         return
 
-    # These cookies are already supplied by Connect or Streamlit. Bind the
-    # callback to one of them without storing or displaying its value.
-    browser_token = st.context.cookies.get("RSC-XSRF") or st.context.cookies.get(
-        "_streamlit_xsrf", ""
-    )
+    # Read the browser token before consuming the callback: the component's
+    # first render returns no value, then reruns Python once storage is ready.
+    browser_token, storage_error = get_browser_identity(callback_url)
+    if storage_error:
+        clear_callback()
+        st.error(
+            "Browser storage is unavailable. Open this app in its own tab and "
+            "allow site data for this server, then reload the page."
+        )
+        st.button("Log in to LabArchives", disabled=True)
+        return
+    if browser_token is None:
+        st.info("Preparing LabArchives login…")
+        return
+
+    # Consume credentials once, removing them from the address bar before any
+    # API request. Never retain them in session state or a shared cache.
+    callback = {
+        key: st.query_params.get_all(key)
+        for key in callback_fields
+        if key in st.query_params
+    }
+    clear_callback()
     secret = os.environ["ACCESS_PWD"]
 
     if callback:
@@ -127,11 +147,6 @@ def main() -> None:
         else:
             st.info("Your LabArchives account has no accessible notebooks.")
         st.caption("This list was fetched at login. Log out and back in to refresh it.")
-        return
-
-    if not browser_token:
-        st.info("Enable browser cookies and reopen the app in its own tab to log in.")
-        st.button("Log in to LabArchives", disabled=True)
         return
 
     try:

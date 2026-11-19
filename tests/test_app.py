@@ -17,7 +17,7 @@ from labarchives_auth import create_login_state, valid_login_state
 
 CALLBACK_URL = "https://connect.example.org/content/test-app/"
 APP_PATH = str(Path(__file__).resolve().parents[1] / "app.py")
-BROWSER_TOKEN = "test-browser-cookie"
+BROWSER_TOKEN = "a" * 64
 API_PASSWORD = "test-api-password"
 ENVIRONMENT = {
     "ACCESS_KEYID": "test-key-id",
@@ -83,13 +83,12 @@ class AppTests(unittest.TestCase):
         self.env = patch.dict(os.environ, ENVIRONMENT)
         self.env.start()
         self.addCleanup(self.env.stop)
-        self.cookies = patch(
-            "streamlit.runtime.context.ContextProxy.cookies",
-            new_callable=PropertyMock,
-            return_value={"_streamlit_xsrf": BROWSER_TOKEN},
+        self.identity = patch(
+            "labarchives_auth.get_browser_identity",
+            return_value=(BROWSER_TOKEN, False),
         )
-        self.cookies.start()
-        self.addCleanup(self.cookies.stop)
+        self.browser_identity = self.identity.start()
+        self.addCleanup(self.identity.stop)
 
         # Use the installed package's actual User/Notebooks implementation,
         # including duplicate notebook names. Only network-facing calls are mocked.
@@ -191,7 +190,7 @@ class AppTests(unittest.TestCase):
         self.assertEqual(app.query_params, {})
         self.assertTrue(self.client_factory.return_value.__exit__.called)
 
-    def test_missing_cookie_disables_login(self):
+    def test_missing_forwarded_cookies_does_not_disable_login(self):
         with patch(
             "streamlit.runtime.context.ContextProxy.cookies",
             new_callable=PropertyMock,
@@ -199,18 +198,41 @@ class AppTests(unittest.TestCase):
         ):
             app = AppTest.from_file(APP_PATH).run()
         self.assertFalse(app.exception)
+        self.assertTrue(app.get("link_button"))
+
+    def test_callback_waits_for_browser_storage_before_consuming_credentials(self):
+        self.browser_identity.return_value = (None, False)
+        app = self.callback_app()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.query_params["auth_code"], "test-auth-code")
+        self.client.login.assert_not_called()
+        self.browser_identity.return_value = (BROWSER_TOKEN, False)
+        app.run()
+        self.assertFalse(app.exception)
+        self.client.login.assert_called_once()
+        self.assertEqual(app.query_params, {})
+        self.assertTrue(app.table)
+
+    def test_browser_storage_error_clears_credentials_and_disables_login(self):
+        self.browser_identity.return_value = (None, True)
+        app = self.callback_app()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.query_params, {})
+        self.assertIn("Browser storage is unavailable", app.error[0].value)
         self.assertTrue(app.button[-1].disabled)
         self.client_factory.assert_not_called()
 
-    def test_connect_cookie_can_bind_login(self):
+    def test_callback_from_different_browser_is_rejected_without_cookies(self):
+        self.browser_identity.return_value = ("b" * 64, False)
         with patch(
             "streamlit.runtime.context.ContextProxy.cookies",
             new_callable=PropertyMock,
-            return_value={"RSC-XSRF": BROWSER_TOKEN},
+            return_value={},
         ):
             app = self.callback_app()
         self.assertFalse(app.exception)
-        self.assertTrue(app.table)
+        self.assertTrue(app.error)
+        self.client.login.assert_not_called()
 
     def test_callback_url_requires_https_outside_localhost(self):
         with patch.dict(

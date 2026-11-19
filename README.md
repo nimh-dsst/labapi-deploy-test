@@ -50,10 +50,16 @@ the app exchanges the callback's `email` and `auth_code` using `Client.login()` 
 displays your notebooks. Login links expire after five minutes; reload the app to
 generate a fresh link if needed.
 
-The callback is bound to an existing Connect or Streamlit browser cookie. Keep
-cookies and Streamlit's default XSRF protection enabled. Callback credentials are
-removed from the address bar before the API call. Only your email and notebook
-list remain in your Streamlit session; they are not shared through an app cache.
+The app creates a random browser token in `localStorage` to validate the returning
+login request. It does not need access to Connect or Streamlit cookies, which may
+be unavailable behind a proxy. A small built-in Streamlit component reads this
+token in both the original and returning tabs. Browser storage contains only this
+random token, never login credentials or notebook information. Open the app from
+the same hostname as `LABARCHIVES_CALLBACK_URL` so both tabs share storage.
+
+Callback credentials are removed from the address bar before the API call. Only
+your email and notebook list remain in your Streamlit session; they are not
+shared through an app cache.
 **Log out** clears that session's data. Reloading the page requires logging in
 again. To refresh notebook access, log out and log back in. Logging out of this
 app does not end your LabArchives or institutional SSO session.
